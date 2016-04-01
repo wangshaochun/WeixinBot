@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 import qrcode
-import urllib, urllib2
+import urllib, urllib2,datetime,uuid
 import cookielib
 import requests
 import xml.dom.minidom
@@ -13,11 +13,12 @@ import logging
 from collections import defaultdict
 from urlparse import urlparse
 from lxml import html
+from pymongo import MongoClient 
 
-# for media upload
-import os
-import mimetypes
-from requests_toolbelt.multipart.encoder import MultipartEncoder
+
+topics=None
+users=None
+
 
 def catchKeyboardInterrupt(fn):
 	def wrapper(*args):
@@ -102,10 +103,9 @@ class WebWeixin(object):
 		self.memberCount = 0
 		self.SpecialUsers = ['newsapp', 'fmessage', 'filehelper', 'weibo', 'qqmail', 'fmessage', 'tmessage', 'qmessage', 'qqsync', 'floatbottle', 'lbsapp', 'shakeapp', 'medianote', 'qqfriend', 'readerapp', 'blogapp', 'facebookapp', 'masssendapp', 'meishiapp', 'feedsapp', 'voip', 'blogappweixin', 'weixin', 'brandsessionholder', 'weixinreminder', 'wxid_novlwrv3lqwv11', 'gh_22b87fa7cb3c', 'officialaccounts', 'notification_messages', 'wxid_novlwrv3lqwv11', 'gh_22b87fa7cb3c', 'wxitil', 'userexperience_alarm', 'notification_messages']
 		self.TimeOut = 20 # 同步最短时间间隔（单位：秒）
-		self.media_count = -1
 
-		self.cookie = cookielib.CookieJar()
-		opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(self.cookie))
+
+		opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookielib.CookieJar()))
 		opener.addheaders = [('User-agent', self.user_agent)]
 		urllib2.install_opener(opener)
 
@@ -151,7 +151,7 @@ class WebWeixin(object):
 		os.startfile(QRCODE_PATH)
 
 	def waitForLogin(self, tip = 1):
-		time.sleep(tip)
+		time.sleep(1)
 		url = 'https://login.weixin.qq.com/cgi-bin/mmwebwx-bin/login?tip=%s&uuid=%s&_=%s' % (tip, self.uuid, int(time.time()))
 		data = self._get(url)
 		pm = re.search(r'window.code=(\d+);', data)
@@ -224,7 +224,6 @@ class WebWeixin(object):
 
 	def webwxgetcontact(self):
 		SpecialUsers = self.SpecialUsers
-		print self.base_uri
 		url = self.base_uri + '/webwxgetcontact?pass_ticket=%s&skey=%s&r=%s' % (self.pass_ticket, self.skey, int(time.time()))
 		dic = self._post(url, {})
 
@@ -355,100 +354,6 @@ class WebWeixin(object):
 		dic = r.json()
 		return dic['BaseResponse']['Ret'] == 0
 
-	def webwxuploadmedia(self, image_name):
-		url = 'https://file2.wx.qq.com/cgi-bin/mmwebwx-bin/webwxuploadmedia?f=json'
-		# 计数器
-		self.media_count = self.media_count + 1
-		# 文件名
-		file_name = image_name
-		# MIME格式
-		# mime_type = application/pdf, image/jpeg, image/png, etc.
-		mime_type = mimetypes.guess_type(image_name,strict=False)[0]
-		# 微信识别的文档格式，微信服务器应该只支持两种类型的格式。pic和doc
-		# pic格式，直接显示。doc格式则显示为文件。
-		media_type = 'pic' if mime_type.split('/')[0] == 'image' else 'doc'
-		# 上一次修改日期
-		lastModifieDate = 'Thu Mar 17 2016 00:55:10 GMT+0800 (CST)'
-		# 文件大小
-		file_size = os.path.getsize(file_name)
-		# PassTicket
-		pass_ticket = self.pass_ticket
-		# clientMediaId
-		client_media_id = str(int(time.time()*1000)) + str(random.random())[:5].replace('.','')
-		# webwx_data_ticket
-		webwx_data_ticket = ''
-		for item in self.cookie:
-			if item.name == 'webwx_data_ticket':
-				webwx_data_ticket = item.value
-				break;
-		if (webwx_data_ticket == ''):
-			return "None Fuck Cookie"
-
-		uploadmediarequest = json.dumps({
-			  "BaseRequest": self.BaseRequest,
-			  "ClientMediaId": client_media_id,
-			  "TotalLen": file_size,
-			  "StartPos": 0,
-			  "DataLen": file_size,
-			  "MediaType": 4
-		}, ensure_ascii=False).encode('utf8')
-
-		multipart_encoder = MultipartEncoder(
-			fields = {
-				'id': 'WU_FILE_' + str(self.media_count), 
-				'name': file_name,
-				'type': mime_type,
-				'lastModifieDate': lastModifieDate,
-				'size': str(file_size),
-				'mediatype': media_type,
-				'uploadmediarequest': uploadmediarequest,
-				'webwx_data_ticket': webwx_data_ticket,
-				'pass_ticket': pass_ticket,
-				'filename': (file_name, open(file_name, 'rb'), mime_type.split('/')[1])
-			},
-			boundary = '-----------------------------1575017231431605357584454111'
-		)
-
-		headers = {
-			'Host': 'file2.wx.qq.com',
-			'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:42.0) Gecko/20100101 Firefox/42.0',
-			'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-			'Accept-Language': 'en-US,en;q=0.5',
-			'Accept-Encoding': 'gzip, deflate',
-			'Referer': 'https://wx2.qq.com/',
-			'Content-Type': multipart_encoder.content_type,
-			'Origin': 'https://wx2.qq.com',
-			'Connection': 'keep-alive',
-			'Pragma': 'no-cache',
-			'Cache-Control': 'no-cache'
-		}
-
-		r = requests.post(url, data = multipart_encoder, headers = headers)
-		response_json = r.json()
-		if response_json['BaseResponse']['Ret'] == 0:
-			return response_json
-		return None
-
-	def webwxsendmsgimg(self, user_id, media_id):
-		url = 'https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxsendmsgimg?fun=async&f=json&pass_ticket=%s' % self.pass_ticket
-		clientMsgId = str(int(time.time()*1000)) + str(random.random())[:5].replace('.','')
-		data_json = {
-			"BaseRequest": self.BaseRequest,
-			"Msg": {
-				"Type": 3,
-				"MediaId": media_id,
-				"FromUserName": self.User['UserName'],
-				"ToUserName": user_id,
-				"LocalID": clientMsgId,
-				"ClientMsgId": clientMsgId
-			}
-		}
-		headers = {'content-type': 'application/json; charset=UTF-8'}
-		data = json.dumps(data_json, ensure_ascii=False).encode('utf8')
-		r = requests.post(url, data = data, headers = headers)
-		dic = r.json()
-		return dic['BaseResponse']['Ret'] == 0
-
 	def _saveFile(self, filename, data, api=None):
 		fn = filename
 		if self.saveSubFolders[api]:
@@ -508,6 +413,11 @@ class WebWeixin(object):
 						self.GroupMemeberList.append(member)
 		return name
 
+	def getUserById(self,id):
+		for member in self.PublicUsersList:
+			if member['UserName'] == id:
+				return member
+		return None
 	def getUserRemarkName(self, id):
 		name = '未知群' if id[:2] == '@@' else '陌生人'
 		if id == self.User['UserName']: return self.User['NickName']	# 自己
@@ -541,7 +451,7 @@ class WebWeixin(object):
 	def getUSerID(self, name):
 		for member in self.MemberList:
 			if name == member['RemarkName'] or name == member['NickName']:
-				return member['UserName']
+				return member
 		return None
 
 	def _showMsg(self, message):
@@ -607,19 +517,45 @@ class WebWeixin(object):
 
 	def handleMsg(self, r):
 		for msg in r['AddMsgList']:
-			print '[*] 你有新的消息，请注意查收'
-			logging.debug('[*] 你有新的消息，请注意查收')
+			#print '[*] 你有新的消息，请注意查收'
+			#logging.debug('[*] 你有新的消息，请注意查收')
 
 			if self.DEBUG:
 				fn = 'msg' + str(int(random.random() * 1000)) + '.json'
-				with open(fn, 'w') as f: f.write(json.dumps(msg))
-				print '[*] 该消息已储存到文件: ' + fn
-				logging.debug('[*] 该消息已储存到文件: %s' % (fn))
+				#with open(fn, 'w') as f: f.write(json.dumps(msg))
+				#print '[*] 该消息已储存到文件: ' + fn
+				#logging.debug('[*] 该消息已储存到文件: %s' % (fn))
 
 			msgType = msg['MsgType']
-			name = self.getUserRemarkName(msg['FromUserName'])
-			content = msg['Content'].replace('&lt;','<').replace('&gt;','>')
-			msgid = msg['MsgId']
+			#name = self.getUserRemarkName(msg['FromUserName'])
+			content = msg['Content'].replace('&lt;','<').replace('&gt;','>').replace('<br/>','').replace('<br />','')
+			#msgid = msg['MsgId']			 
+			user=self.getUserById(msg['FromUserName'])
+			if user is None:
+				print 'user is none'
+				continue
+			if content.find('http://mp.weixin.qq.com/')==-1:
+				continue
+			ename=user['Alias']
+			username = user['NickName'];
+			Signature = user['Signature'];
+			print username
+			if msgType == 49 and msg['AppMsgType']==5:
+				items=content.split('<item>')				
+				print len(items)
+				i=0
+				for item in items:
+					i=i+1
+					if i==1:
+						continue
+					itemtitle=self._searchContent('title', item, 'xml')
+					itemurl=self._searchContent('url', item, 'xml')
+					print 'itemtitle is '+itemtitle
+					print 'itemurl is '+itemurl
+					if itemtitle is None or len(itemtitle)<=2 or itemurl is None or len(itemurl)<=20:
+						continue;
+					self.addTopic(ename,username,Signature,itemtitle,itemurl)
+			continue
 
 			if msgType == 1:
 				raw_msg = { 'raw_msg': msg }
@@ -718,15 +654,15 @@ class WebWeixin(object):
 				elif selector == '6':
 					# TODO
 					redEnvelope += 1
-					print '[*] 收到疑似红包消息 %d 次' % redEnvelope
-					logging.debug('[*] 收到疑似红包消息 %d 次' % redEnvelope)
+					#print '[*] 收到疑似红包消息 %d 次' % redEnvelope
+					#logging.debug('[*] 收到疑似红包消息 %d 次' % redEnvelope)
 				elif selector == '7':
 					playWeChat += 1
-					print '[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat
-					logging.debug('[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat)
+					#print '[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat
+					#logging.debug('[*] 你在手机上玩微信被我发现了 %d 次' % playWeChat)
 					r = self.webwxsync()
 				elif selector == '0':
-					time.sleep(1)
+					time.sleep(2)
 			if (time.time() - self.lastCheckTs) <= 20: time.sleep(time.time() - self.lastCheckTs)
 
 	def sendMsg(self, name, word, isfile = False):
@@ -764,25 +700,20 @@ class WebWeixin(object):
 				print ' [失败]'
 			time.sleep(1)
 
-	def sendImg(self, name, file_name):
-		response = self.webwxuploadmedia(file_name)
-		media_id = ""
-		if response is not None:
-			media_id = response['MediaId']
-		user_id = self.getUSerID(name)
-		response = self.webwxsendmsgimg(user_id, media_id)
-
 	@catchKeyboardInterrupt
 	def start(self):
+		self.process()
 		self._echo('[*] 微信网页版 ... 开动'); print; logging.debug('[*] 微信网页版 ... 开动')
 		while True:
 			self._run('[*] 正在获取 uuid ... ', self.getUUID)
 			self._echo('[*] 正在获取二维码 ... 成功'); print; logging.debug('[*] 微信网页版 ... 开动'); self.genQRCode()
 			print '[*] 请使用微信扫描二维码以登录 ... '
 			if not self.waitForLogin():
+				time.sleep(20)
 				continue
 				print '[*] 请在手机上点击确认以登录 ... '
 			if not self.waitForLogin(0):
+				time.sleep(20)
 				continue
 			break
 
@@ -827,14 +758,12 @@ class WebWeixin(object):
 				logging.debug('发送文件')
 			elif text[:3] == 'i->':
 				print '发送图片'
-				[name, file_name] = text[3:].split(':')
-				self.sendImg(name, file_name)
 				logging.debug('发送图片')
 
 	def _safe_open(self, path):
 		if self.autoOpen:
 			if platform.system() == "Linux":
-				os.system("xdg-open %s &" % path)
+			    os.system("xdg-open %s &" % path)
 			else:
 				os.system('open %s &' % path)
 
@@ -853,12 +782,23 @@ class WebWeixin(object):
 			WHITE = '\033[47m  \033[0m'
 			print ''.join([BLACK if j else WHITE for j in i])
 
-	def _str2qr(self, str):
+	def _str2qr(self, qrstr):
 		qr = qrcode.QRCode()
 		qr.border = 1
-		qr.add_data(str)
-		mat = qr.get_matrix()
+		qr.version=1
+		qr.add_data(qrstr) 
+		qr.make(fit=True)
+
+		rdm=random.randint(1, 100)
+		filename='/nodeclub/public/qr/login'+str(rdm)+'.png'		 
+		if os.path.exists(filename):
+			os.remove(filename)
+		img = qr.make_image()
+		img.save(filename)		
+
+		mat = qr.get_matrix()		
 		self._printQR(mat) # qr.print_tty() or qr.print_ascii()
+		print 'qr img url: '+filename
 
 	def _transcoding(self, data):
 		if not data: return data
@@ -915,7 +855,99 @@ class WebWeixin(object):
 			if not pm: pm = re.search('<{0}><\!\[CDATA\[(.*?)\]\]></{0}>'.format(key),content)
 			if pm: return pm.group(1)
 		return '未知'
-
+	def process(self): 
+		connection=MongoClient('127.0.0.1', 27017)
+		global topics
+		topics = connection.dyx.topics
+		global users
+		users=connection.dyx.users
+	def GetNowTime(self):
+		return time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(int(time.time()-28800)))
+	def insertTopic(self,author_id,content,title,tab):
+		sendtime=datetime.datetime.strptime(self.GetNowTime(),'%Y-%m-%d %H:%M:%S') 
+		datas=[{"__v":0,"author_id":author_id,"tab":tab,"content":content,
+		"title":title,"deleted":False,
+		"last_reply_at":sendtime,"update_at":sendtime,"create_at":sendtime,
+		"collect_count":0,"visit_count":0,"reply_count":0,"lock":False,
+		"good":False,"top":False,"issend":0}]
+		#print datas;
+		topics.insert(datas)
+	def insertUser(self,weixinEName,weixinName,Signature):
+		sendtime=datetime.datetime.strptime(self.GetNowTime(),'%Y-%m-%d %H:%M:%S') 
+		tab=self.getTab(Signature);
+		try:
+			self.downimgbyfilename(weixinEName)
+		except Exception,e:
+			print str(e)
+		newuser=[{"loginname":weixinEName,"active":True,"name":weixinName,
+			"email":str(int(time.time()))+"@dianxiaoyue.com",
+			"accessToken":str(uuid.uuid1()),"avatar":"/public/img/"+weixinEName+".jpg",
+			"pass":"$2a$10$6.XBCgvurt2QHJsBy9poMeBvF0VDJXMpJ9a6w935Ufz0eYk8tojTO",
+			"collect_tag_count":0,"collect_topic_count":0,"create_at":sendtime,
+			"Signature":Signature,"tab":tab,"following_count":0,"is_block":False,
+			"receive_at_mail":False,"receive_reply_mail":False,"reply_count":0,
+			"score":10,"topic_count":10,"update_at":sendtime}];
+		users.insert(newuser)
+	def getTab(self,Signature):
+		tab = "yc";
+		if Signature.find("电影")>=0 or Signature.find("音乐")>=0 or Signature.find("大片")>=0:
+			tab = "movie"
+		elif Signature.find("美食")>=0 or Signature.find("饮食")>=0 or Signature.find("健身")>=0:
+			tab = "food"
+		elif Signature.find("汽车")>=0:
+			tab = "auto"
+		elif Signature.find("编程")>=0 or Signature.find("前端")>=0 or Signature.find("代码")>=0:
+			tab = "code"
+		elif Signature.find("历史")>=0 or Signature.find("书")>=0 or Signature.find("文艺")>=0:
+			tab = "reedbook"
+		elif Signature.find("科技")>=0 or Signature.find("技术")>=0:
+			tab = "tech"
+		elif Signature.find("搞笑")>=0 or Signature.find("笑话")>=0 or Signature.find("娱乐")>=0:
+			tab = "fun"
+		elif Signature.find("时尚")>=0 or Signature.find("生活")>=0:
+			tab = "life"
+		elif Signature.find("新闻")>=0 or Signature.find("资讯")>=0:
+			tab = "news"
+		return tab
+	def downimgbyfilename(self,filename):
+		localpath="/nodeclub/public/img/"+filename+".jpg"
+		if os.path.exists(localpath):
+			return
+		url="https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxgeticon?username="+filename
+		request = urllib2.Request(url = url)
+		request.add_header('Referer', 'https://wx.qq.com/')
+		
+		of=open(localpath, 'w+b')
+		q= urllib2.urlopen(request)
+		of.write(q.read())
+		q.close()
+		of.clos	
+		localpath="/nodeclub/public/qr/"+filename+".jpg"
+		if os.path.exists(localpath):
+			return
+		url="http://open.weixin.qq.com/qr/code/?username="+filename
+		request = urllib2.Request(url = url)
+		request.add_header('Referer', 'https://wx.qq.com/')
+		of=open(localpath, 'w+b')
+		q= urllib2.urlopen(request)
+		of.write(q.read())
+		q.close()
+		of.close()
+	def addTopic(self,weixinEName,weixinName,Signature,title,body):
+		user=users.find_one({'loginname':weixinEName})
+		if not user:
+			self.insertUser(weixinEName,weixinName,Signature)
+			user=users.find_one({'loginname':weixinEName})
+		existstitle=topics.find({'title':title})
+		if existstitle and existstitle.count() > 0:
+			print "title exist"
+			return		
+		tab=user["tab"]
+		if not tab:
+			tab=self.getTab(Signature)
+			users.update({'loginname':weixinEName},{'$set':{"tab":tab}},False,False)
+		print "[#] insert topic "+ title
+		self.insertTopic(user["_id"],body,title,tab);
 class UnicodeStreamFilter:
 	def __init__(self, target):
 		self.target = target
@@ -939,8 +971,8 @@ if sys.stdout.encoding == 'cp936':
 if __name__ == '__main__':
 
 	logger = logging.getLogger(__name__)
-	import coloredlogs
-	coloredlogs.install(level='DEBUG')
+	#import coloredlogs
+	#coloredlogs.install(level='DEBUG')
 
 	webwx = WebWeixin()
 	webwx.start()
